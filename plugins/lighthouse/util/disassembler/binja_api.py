@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
+import ctypes
 import collections
 import functools
 import logging
 import os
 import sys
 import threading
-import ctypes # Added import
+import binaryninja # Added import
 
-import binaryninja
 from binaryninja import PythonScriptingInstance, binaryview
 from binaryninja.plugin import BackgroundTaskThread
 from binaryninjaui import (Sidebar, SidebarContextSensitivity, SidebarWidget,
@@ -29,6 +28,8 @@ logger = logging.getLogger("Lighthouse.API.Binja")
 
 
 def execute_sync(function):
+    # 
+
     """
     Synchronize with the disassembler for safe database access.
     """
@@ -418,6 +419,11 @@ class LighthouseWidget(SidebarWidget):
         CoverageOverview(lctx, self)
         
         # The parent constructor already handles UIActionHandler setup, so we skip it here.
+        
+    @property
+    def visible(self):
+        # FIX: Implement the .visible property expected by CoverageOverview.py's EventProxy
+        return self.isVisible()
 
 
 class LighthouseWidgetType(SidebarWidgetType):
