@@ -1,28 +1,32 @@
 # -*- coding: utf-8 -*-
+import collections
+import functools
+import logging
 import os
 import sys
-import logging
-import functools
 import threading
-import collections
-
-from .api import DisassemblerCoreAPI, DisassemblerContextAPI
-from ..qt import *
-from ..misc import is_mainthread, not_mainthread
+import ctypes # Added import
 
 import binaryninja
 from binaryninja import PythonScriptingInstance, binaryview
 from binaryninja.plugin import BackgroundTaskThread
-from binaryninjaui import Sidebar, SidebarWidget, SidebarWidgetType, SidebarContextSensitivity, SidebarWidgetLocation, UIActionHandler, UIContext
+from binaryninjaui import (Sidebar, SidebarContextSensitivity, SidebarWidget,
+                           SidebarWidgetLocation, SidebarWidgetType,
+                           UIActionHandler, UIContext)
 from PySide6 import QtCore
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QImage, QPixmap, QPainter, QFont, QColor
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+
+from ..misc import is_mainthread, not_mainthread
+from ..qt import *
+from .api import DisassemblerContextAPI, DisassemblerCoreAPI
 
 logger = logging.getLogger("Lighthouse.API.Binja")
 
-#------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Utils
-#------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+
 
 def execute_sync(function):
     """
@@ -51,6 +55,7 @@ def execute_sync(function):
         #
 
         output = [None]
+
         def thunk():
             output[0] = function(*args, **kwargs)
             return 1
@@ -59,9 +64,11 @@ def execute_sync(function):
             """
             A stub task to safely read from the BNDB.
             """
+
             def __init__(self, text, function):
                 super(DatabaseRead, self).__init__(text, False)
                 self._task_to_run = function
+
             def run(self):
                 self._task_to_run()
                 self.finish()
@@ -73,11 +80,14 @@ def execute_sync(function):
 
         # return the output of the synchronized execution / read
         return output[0]
+
     return wrapper
 
-#------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
 # Disassembler API
-#------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+
 
 class BinjaCoreAPI(DisassemblerCoreAPI):
     NAME = "BINJA"
@@ -85,34 +95,36 @@ class BinjaCoreAPI(DisassemblerCoreAPI):
     def __init__(self):
         super(BinjaCoreAPI, self).__init__()
         self._init_version()
+        # Store a reference to the SidebarWidgetType instance
+        self._sidebar_widget_type = None
 
     def _init_version(self):
         version_string = binaryninja.core_version()
 
         # retrieve Binja's version #
-        if "-" in version_string: # dev
+        if "-" in version_string:  # dev
             disassembler_version = version_string.split("-", 1)[0]
-        else: # commercial, personal
+        else:  # commercial, personal
             disassembler_version = version_string.split(" ", 1)[0]
 
-        major, minor, patch, *_= disassembler_version.split(".") + ['0']
+        major, minor, patch, *_ = disassembler_version.split(".") + ["0"]
 
         # save the version number components for later use
         self._version_major = major
         self._version_minor = minor
         self._version_patch = patch
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Properties
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     @property
     def headless(self):
-        return not(binaryninja.core_ui_enabled())
+        return not (binaryninja.core_ui_enabled())
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Synchronization Decorators
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     @staticmethod
     def execute_read(function):
@@ -139,15 +151,17 @@ class BinjaCoreAPI(DisassemblerCoreAPI):
 
         return wrapper
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # API Shims
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     def get_disassembler_user_directory(self):
         return os.path.split(binaryninja.user_plugin_path())[0]
 
     def get_disassembly_background_color(self):
-        return binaryninjaui.getThemeColor(binaryninjaui.ThemeColor.LinearDisassemblyBlockColor)
+        return binaryninjaui.getThemeColor(
+            binaryninjaui.ThemeColor.LinearDisassemblyBlockColor
+        )
 
     def is_msg_inited(self):
         return True
@@ -159,43 +173,42 @@ class BinjaCoreAPI(DisassemblerCoreAPI):
     def message(self, message):
         print(message)
 
-    #--------------------------------------------------------------------------
-    # UI API Shims
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # UI API Shims (Migrated to SidebarWidget)
+    # --------------------------------------------------------------------------
 
     def register_dockable(self, dockable_name, create_widget_callback):
-        Sidebar.addSidebarWidgetType(LighthouseWidgetType())
+        # We store the SidebarWidgetType instance so we don't re-register it
+        if self._sidebar_widget_type is None:
+            self._sidebar_widget_type = LighthouseWidgetType()
+            Sidebar.addSidebarWidgetType(self._sidebar_widget_type)
 
     def create_dockable_widget(self, parent, dockable_name):
-        # return DockableWidget(parent, dockable_name)
+        # This method is now implicitly handled by LighthouseWidgetType.createWidget
         pass
 
     def show_dockable(self, dockable_name):
         """
         Show the named dockable widget.
         """
-        # --- FIX: Check if Sidebar.current() returns a valid object ---
         current_sidebar = Sidebar.current()
         
         if current_sidebar:
             # CRITICAL FIX: Use the registered string name "Lighthouse"
-            current_sidebar.focus("Lighthouse") 
+            current_sidebar.focus("Lighthouse")
         else:
-            # Use self.warning (inherited from DisassemblerCoreAPI) to notify the user
+            # Fallback for when no sidebar/frame is currently active/focused
             self.warning("Failed to show dockable '%s': No active BinaryView window with a sidebar found." % dockable_name)
 
     def hide_dockable(self, dockable_name):
-        # dock_handler = DockHandler.getActiveDockHandler()
-        # dock_handler.setVisible(dockable_name, False)
         pass
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # XXX Binja Specfic Helpers
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     def binja_get_bv_from_dock(self):
         ac = UIContext.activeContext()
-        
         if not ac:
             return None
         vf = ac.getCurrentViewFrame()
@@ -205,23 +218,24 @@ class BinjaCoreAPI(DisassemblerCoreAPI):
         bv = vi.getData()
         return bv
 
+
 class BinjaContextAPI(DisassemblerContextAPI):
 
     def __init__(self, dctx):
         super(BinjaContextAPI, self).__init__(dctx)
         self.bv = dctx
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Properties
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     @property
     def busy(self):
         return self.bv.analysis_info.state != binaryninja.enums.AnalysisState.IdleState
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # API Shims
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     def get_current_address(self):
         ac = UIContext.activeContext()
@@ -311,22 +325,24 @@ class BinjaContextAPI(DisassemblerContextAPI):
         func.name = new_name
         self.bv.commit_undo_actions(state)
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Hooks API
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     def create_rename_hooks(self):
         return RenameHooks(self.bv)
 
-    #------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------
     # Function Prefix API
-    #------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------
 
-    PREFIX_SEPARATOR = "▁" # Unicode 0x2581
+    PREFIX_SEPARATOR = " "  # Unicode 0x2581
 
-#------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
 # Hooking
-#------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+
 
 class RenameHooks(binaryview.BinaryDataNotification):
     """
@@ -368,18 +384,45 @@ class RenameHooks(binaryview.BinaryDataNotification):
         """
         pass
 
-#------------------------------------------------------------------------------
-# UI
-#------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# UI (SidebarWidget implementation)
+# ------------------------------------------------------------------------------
+
+# Store a temporary reference to the global integration object so the widget can access it.
+# This is a common pattern for plugins injecting complex logic into the BN UI.
+_INTEGRATION_HACK = None
 
 class LighthouseWidget(SidebarWidget):
+    """
+    The main Sidebar Widget container for the Lighthouse UI.
+    """
     def __init__(self, name, frame, data):
         SidebarWidget.__init__(self, name)
-        self.actionHandler = UIActionHandler()
-        self.actionHandler.setupActionHandler(self)
+        
+        # This 'data' object is the BinaryView (dctx in Lighthouse terms)
+        dctx = data 
+
+        # We must acquire the context to get the core integration object 
+        # (which manages the LighthouseCore state)
+        global _INTEGRATION_HACK
+        core = _INTEGRATION_HACK 
+
+        # This call creates/fetches the LighthouseContext for the current BinaryView
+        # and starts the subsystems (metadata, painter, director) if needed.
+        lctx = core.get_context(dctx)
+        
+        # The core logic requires the underlying Qt widget to be populated by the
+        # create_coverage_overview function defined in lighthouse/integration/core.py
+        from lighthouse.ui import CoverageOverview
+        CoverageOverview(lctx, self)
+        
+        # The parent constructor already handles UIActionHandler setup, so we skip it here.
+
 
 class LighthouseWidgetType(SidebarWidgetType):
     def __init__(self):
+        # NOTE: Using placeholder 'L' icon for now, real icon is needed for release.
         icon = QImage(56, 56, QImage.Format_RGB32)
         icon.fill(0)
 
@@ -390,13 +433,25 @@ class LighthouseWidgetType(SidebarWidgetType):
         p.drawText(QRectF(0, 0, 56, 56), Qt.AlignCenter, "L")
         p.end()
 
+        # The internal name "Lighthouse" is used to focus the widget in show_dockable
         SidebarWidgetType.__init__(self, icon, "Lighthouse")
 
     def createWidget(self, frame, data):
+        # This callback is called by Binary Ninja to create the actual widget.
         return LighthouseWidget("Lighthouse", frame, data)
 
     def defaultLocation(self):
         return SidebarWidgetLocation.RightContent
 
     def contextSensitivity(self):
-        return SidebarContextSensitivity.SelfManagedSidebarContext
+        # We want one instance per BinaryView (per database)
+        return SidebarContextSensitivity.PerViewTypeSidebarContext
+
+
+# Set the hack reference to the integration object
+def set_integration_hack(integration_object):
+    global _INTEGRATION_HACK
+    _INTEGRATION_HACK = integration_object
+
+# NOTE: The SidebarWidgetType registration now occurs through the integration hook below:
+# Sidebar.addSidebarWidgetType(LighthouseWidgetType())
