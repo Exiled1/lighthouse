@@ -18,34 +18,32 @@ logger = logging.getLogger("Lighthouse.Painting.Binja")
 
 class BinjaCoverageRenderLayer(RenderLayer):
     """
-    Render layer for applying Lighthouse coverage highlighting.
+    Render layer for applying Lighthouse coverage highlighting across all view types.
     """
     
-    # Static properties to be set externally by the BinjaPainter
     director = None
     palette = None
 
-    # Layer Name (for registration and UI menu)
     name = "Lighthouse Coverage" 
-
-    # Explicitly set to enable by default and show in the View Options menu
     default_enable_state = RenderLayerDefaultEnableState.EnabledByDefaultRenderLayerDefaultEnableState
 
     def __init__(self):
-        # Call base constructor without arguments
         super(BinjaCoverageRenderLayer, self).__init__()
-        
-    def apply_to_block(self, block, lines):
+
+    #--------------------------------------------------------------------------
+    # Core Logic (Private Helper)
+    #--------------------------------------------------------------------------
+
+    def _apply_coverage_highlighting(self, block, lines):
         """
-        Applies coverage highlighting to the lines of a basic block.
+        Applies coverage highlighting to the lines of a given block (private helper).
         """
         
-        # Check if context data is available
-        if not BinjaCoverageRenderLayer.director or not BinjaCoverageRenderLayer.palette:
+        if not self.director or not self.palette:
             return lines
 
-        db_coverage = BinjaCoverageRenderLayer.director.coverage
-        db_metadata = BinjaCoverageRenderLayer.director.metadata
+        db_coverage = self.director.coverage
+        db_metadata = self.director.metadata
         node_address = block.start
         
         node_metadata = db_metadata.nodes.get(node_address, None)
@@ -54,7 +52,7 @@ class BinjaCoverageRenderLayer(RenderLayer):
         if not (node_coverage and node_metadata):
             return lines
 
-        r, g, b, _ = BinjaCoverageRenderLayer.palette.coverage_paint.getRgb()
+        r, g, b, _ = self.palette.coverage_paint.getRgb()
         color = HighlightColor(red=r, green=g, blue=b)
         
         covered_instructions = set(node_coverage.executed_instructions.keys())
@@ -62,7 +60,7 @@ class BinjaCoverageRenderLayer(RenderLayer):
         for line in lines:
             address = getattr(line, 'address', None)
 
-            # Address is empty.
+            # Skip if address is None (non-instruction line) or not covered.
             if address is None or address not in covered_instructions:
                 continue
 
@@ -70,6 +68,23 @@ class BinjaCoverageRenderLayer(RenderLayer):
             line.highlight = color
                 
         return lines
+
+    #--------------------------------------------------------------------------
+    # Explicit Render Layer API Implementations (Required for ILs)
+    #--------------------------------------------------------------------------
+    
+    def apply_to_disassembly_block(self, block, lines):
+        return self._apply_coverage_highlighting(block, lines)
+
+    def apply_to_low_level_il_block(self, block, lines):
+        return self._apply_coverage_highlighting(block, lines)
+
+    def apply_to_medium_level_il_block(self, block, lines):
+        return self._apply_coverage_highlighting(block, lines)
+
+    def apply_to_high_level_il_block(self, block, lines):
+        return self._apply_coverage_highlighting(block, lines)
+
 
 #------------------------------------------------------------------------------
 # Binary Ninja Painter
@@ -85,12 +100,10 @@ class BinjaPainter(DatabasePainter):
     def __init__(self, lctx, director, palette):
         super(BinjaPainter, self).__init__(lctx, director, palette)
 
-        # Register the Render Layer once per BN session
         if BinjaPainter._coverage_render_layer is None:
             BinjaCoverageRenderLayer.register()
             BinjaPainter._coverage_render_layer = True
         
-        # Update the static context properties for the new view/session
         BinjaCoverageRenderLayer.director = director
         BinjaCoverageRenderLayer.palette = palette
 
@@ -124,7 +137,6 @@ class BinjaPainter(DatabasePainter):
     def _refresh_ui(self):
         """
         Triggers a redraw of all relevant views to engage the Render Layer.
-        Must be executed on the main thread to interact with the UI.
         """
         bv = disassembler[self.lctx].bv
         
