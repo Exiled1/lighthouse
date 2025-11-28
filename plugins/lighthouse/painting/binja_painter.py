@@ -3,6 +3,7 @@ import logging
 import binaryninja
 from binaryninja import HighlightStandardColor
 from binaryninja.highlight import HighlightColor
+from binaryninja.renderlayer import RenderLayer
 
 from lighthouse.painting import DatabasePainter
 from lighthouse.util.disassembler import disassembler
@@ -10,122 +11,131 @@ from lighthouse.util.disassembler import disassembler
 logger = logging.getLogger("Lighthouse.Painting.Binja")
 
 #------------------------------------------------------------------------------
+# Binary Ninja Coverage Render Layer
+#------------------------------------------------------------------------------
+
+class BinjaCoverageRenderLayer(RenderLayer):
+    """
+    Render layer for applying Lighthouse coverage highlighting.
+    
+    This layer dynamically applies highlight colors to disassembly lines 
+    based on the current coverage data held by the Director.
+    """
+    
+    # Static properties to be set externally by the BinjaPainter
+    director = None
+    palette = None
+
+    # Set the layer name as a class attribute.
+    name = "Lighthouse Coverage" 
+
+    # Remove the 'name' argument and call super().__init__ without arguments.
+    def __init__(self):
+        super(BinjaCoverageRenderLayer, self).__init__()
+        
+    def apply_to_block(self, block, lines):
+        """
+        Applies coverage highlighting to the lines of a basic block.
+        """
+        
+        # If the director or palette is not set, skip painting
+        if not BinjaCoverageRenderLayer.director or not BinjaCoverageRenderLayer.palette:
+            return lines
+
+        db_coverage = BinjaCoverageRenderLayer.director.coverage
+        db_metadata = BinjaCoverageRenderLayer.director.metadata
+        node_address = block.start
+        
+        node_metadata = db_metadata.nodes.get(node_address, None)
+        node_coverage = db_coverage.nodes.get(node_address, None)
+        
+        # If no coverage or metadata for this block, return unhighlighted lines
+        if not (node_coverage and node_metadata):
+            return lines
+
+        # Get the coverage highlight color
+        r, g, b, _ = BinjaCoverageRenderLayer.palette.coverage_paint.getRgb()
+        color = HighlightColor(red=r, green=g, blue=b)
+        
+        # Collect all covered instruction addresses within this basic block
+        covered_instructions = set(node_coverage.executed_instructions.keys())
+
+        # Apply the highlight color to each covered instruction line
+        for line in lines:
+            # DisassemblyTextLine.addr is the address of the instruction
+            if line.addr in covered_instructions:
+                line.highlight = color
+                
+        return lines
+
+#------------------------------------------------------------------------------
 # Binary Ninja Painter
 #------------------------------------------------------------------------------
 
 class BinjaPainter(DatabasePainter):
     """
-    Asynchronous Binary Ninja database painter.
+    Asynchronous Binary Ninja database painter, now implemented via Render Layers.
     """
+
+    # Static variable now acts as a registration flag (True if registered)
+    _coverage_render_layer = None
 
     def __init__(self, lctx, director, palette):
         super(BinjaPainter, self).__init__(lctx, director, palette)
 
-    #--------------------------------------------------------------------------
-    # Paint Primitives
-    #--------------------------------------------------------------------------
+        # Initialize and register the Render Layer once globally
+        if BinjaPainter._coverage_render_layer is None:
+            BinjaCoverageRenderLayer.register()
+            
+            # Mark as registered
+            BinjaPainter._coverage_render_layer = True
+        
+        # Update the shared layer properties for the current context
+        BinjaCoverageRenderLayer.director = director
+        BinjaCoverageRenderLayer.palette = palette
 
-    #
-    # NOTE:
-    #   due to the manner in which Binary Ninja implements basic block
-    #   (node) highlighting, there is almost no need to paint individual
-    #   instructions. for now we, will simply make the main instruction
-    #   painting function a no-op's
-    #
+
+    #--------------------------------------------------------------------------
+    # Paint Primitives (simplified to refresh UI)
+    #--------------------------------------------------------------------------
 
     def _paint_instructions(self, instructions):
+        # The Render Layer handles drawing. Simply refresh.
+        self._refresh_ui()
         self._action_complete.set()
 
     def _clear_instructions(self, instructions):
-        bv = disassembler[self.lctx].bv
-        state = bv.begin_undo_actions()
-
-        for address in instructions:
-            for func in bv.get_functions_containing(address):
-                func.set_auto_instr_highlight(address, HighlightStandardColor.NoHighlightColor)
+        # The Render Layer handles clearing. Simply refresh.
+        self._refresh_ui()
         self._painted_partial -= set(instructions)
         self._painted_instructions -= set(instructions)
         self._action_complete.set()
 
-        if hasattr(bv, "forget_undo_actions"):
-            bv.forget_undo_actions(state)
-        else:
-            bv.commit_undo_actions(state)
-
     def _partial_paint(self, bv, instructions, color):
-        for address in instructions:
-            for func in bv.get_functions_containing(address):
-                func.set_auto_instr_highlight(address, color)
+        # Partial paint is handled by the Render Layer logic. Simply refresh.
+        self._refresh_ui()
         self._painted_partial |= set(instructions)
         self._painted_instructions |= set(instructions)
 
     def _paint_nodes(self, node_addresses):
-        bv = disassembler[self.lctx].bv
-        db_coverage = self.director.coverage
-        db_metadata = self.director.metadata
-
-        state = bv.begin_undo_actions()
-
-        r, g, b, _ = self.palette.coverage_paint.getRgb()
-        color = HighlightColor(red=r, green=g, blue=b)
-
-        partial_nodes = set()
-        for node_address in node_addresses:
-            node_metadata = db_metadata.nodes.get(node_address, None)
-            node_coverage = db_coverage.nodes.get(node_address, None)
-
-            # read comment in ida_painter.py (self._paint_nodes)
-            if not (node_coverage and node_metadata):
-                self._msg_queue.put(self.MSG_ABORT)
-                node_addresses = node_addresses[:node_addresses.index(node_address)]
-                break
-
-            # special case for nodes that are only partially executed...
-            if node_coverage.instructions_executed != node_metadata.instruction_count:
-                partial_nodes.add(node_address)
-                self._partial_paint(bv, node_coverage.executed_instructions.keys(), color)
-                continue
-
-            for node in bv.get_basic_blocks_starting_at(node_address):
-                node.highlight = color
-
-        self._painted_nodes |= (set(node_addresses) - partial_nodes)
+        # Nodes are painted by the Render Layer. Simply refresh.
+        self._painted_nodes |= set(node_addresses)
+        self._refresh_ui()
         self._action_complete.set()
-
-        if hasattr(bv, "forget_undo_actions"):
-            bv.forget_undo_actions(state)
-        else:
-            bv.commit_undo_actions(state)
 
     def _clear_nodes(self, node_addresses):
-        bv = disassembler[self.lctx].bv
-        db_metadata = self.director.metadata
-
-        state = bv.begin_undo_actions()
-
-        for node_address in node_addresses:
-            node_metadata = db_metadata.nodes.get(node_address, None)
-
-            # read comment in ida_painter.py (self._paint_nodes)
-            if not node_metadata:
-                self._msg_queue.put(self.MSG_ABORT)
-                node_addresses = node_addresses[:node_addresses.index(node_address)]
-                break
-
-            for node in bv.get_basic_blocks_starting_at(node_address):
-                node.highlight = HighlightStandardColor.NoHighlightColor
-
+        # Nodes are cleared by the Render Layer. Simply refresh.
         self._painted_nodes -= set(node_addresses)
+        self._refresh_ui()
         self._action_complete.set()
 
-        if hasattr(bv, "forget_undo_actions"):
-            bv.forget_undo_actions(state)
-        else:
-            bv.commit_undo_actions(state)
-
     def _refresh_ui(self):
-        pass
+        """
+        Triggers a redraw of all relevant views to engage the Render Layer.
+        """
+        bv = disassembler[self.lctx].bv
+        # This is the new API call to refresh Render Layers
+        bv.recalculate_render_layer()
 
     def _cancel_action(self, job):
         pass
-

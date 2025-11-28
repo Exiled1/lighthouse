@@ -7,6 +7,7 @@ import sys
 import threading
 
 from binaryninja import PythonScriptingInstance, binaryview
+import binaryninja
 from binaryninja.plugin import BackgroundTaskThread
 from binaryninjaui import (Sidebar, SidebarContextSensitivity, SidebarWidget,
                            SidebarWidgetLocation, SidebarWidgetType,
