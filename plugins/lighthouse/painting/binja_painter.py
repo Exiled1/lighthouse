@@ -7,7 +7,7 @@ from binaryninja.renderlayer import RenderLayer
 from binaryninja.enums import RenderLayerDefaultEnableState
 from binaryninja import mainthread
 from typing import TYPE_CHECKING
-from lighthouse.util.log import lmsg
+from lighthouse.util.log import lmsg # Using lmsg for debugging visibility
 
 from lighthouse.painting import DatabasePainter
 from lighthouse.util.disassembler import disassembler
@@ -34,19 +34,84 @@ class BinjaCoverageRenderLayer(RenderLayer):
         super(BinjaCoverageRenderLayer, self).__init__()
 
     #--------------------------------------------------------------------------
-    # Core Coloring Logic (Helper)
+    # Core Logic
     #--------------------------------------------------------------------------
 
-    def _get_coverage_key(self, block):
+    def _get_coverage_key(self, block, lines):
         """
-        Retrieves the correct native address to use as the lookup key for Lighthouse coverage.
-        """
-        if block.is_il and hasattr(block, 'source_block') and block.source_block is not None:
-            # For ILs, the coverage key is the start address of the underlying native block.
-            return block.source_block.start
+        Retrieves the correct native address (Native Basic Block Start) 
+        to use as the lookup key for Lighthouse coverage.
         
-        # For Disassembly blocks, or if source_block is missing/unreliable, use block.start.
-        return block.start
+        FIX: Uses the address of the first line to find the containing Native Basic Block.
+        """
+        # If it's a native block, use its start address directly.
+        if not block.is_il:
+            return block.start
+
+        # --- IL Block Logic: Resolve to Native Basic Block using the line address anchor ---
+        
+        # Get the address of the first instruction represented by this IL block.
+        if not lines or not hasattr(lines[0], 'address'):
+            return block.function.start if block.function else block.start
+
+        native_instr_addr = getattr(lines[0], 'address', None)
+        
+        if native_instr_addr is None:
+            return block.function.start if block.function else block.start
+        
+        # Use the native instruction address to find the containing Native Basic Block.
+        native_bb = block.function.get_basic_block_at(native_instr_addr)
+        
+        if native_bb:
+            # Yay! Found the native BasicBlock.
+            return native_bb.start
+
+        # Fallback to the function's native start address.
+        return block.function.start if block.function else block.start
+
+
+    def _apply_coverage_highlighting(self, block, lines):
+        """
+        Applies coverage highlighting to the lines of a given block (private helper).
+        """
+        
+        native_block_addr = self._get_coverage_key(block, lines)
+        
+        if not self.director or not self.palette:
+            return lines
+
+        db_coverage = self.director.coverage
+        db_metadata = self.director.metadata
+
+        # Use the calculated native address key for metadata/coverage lookup.
+        node_metadata = db_metadata.nodes.get(native_block_addr, None)
+        node_coverage = db_coverage.nodes.get(native_block_addr, None)
+        
+        if not (node_coverage and node_metadata):
+            return lines
+
+        r, g, b, _ = self.palette.coverage_paint.getRgb()
+        color = HighlightColor(red=r, green=g, blue=b)
+        
+        covered_instructions = set(node_coverage.executed_instructions.keys())
+
+        # Apply line highlighting for all blocks (Disassembly + ILs)
+        for line in lines:
+            # Using getattr for defensive access to the instruction address
+            address = getattr(line, 'address', None)
+
+            # Skip if address is None (non-instruction line) or not covered.
+            if address is None or address not in covered_instructions:
+                continue
+
+            # Apply highlight
+            line.highlight = color
+                
+        return lines
+
+    #--------------------------------------------------------------------------
+    # Explicit Render Layer API Implementations
+    #--------------------------------------------------------------------------
 
     def apply_to_disassembly_block(self, block: 'BasicBlock', lines):
         return self._apply_coverage_highlighting(block, lines)
@@ -60,62 +125,6 @@ class BinjaCoverageRenderLayer(RenderLayer):
     def apply_to_high_level_il_block(self, block: 'HighLevelILBasicBlock', lines):
         return self._apply_coverage_highlighting(block, lines)
 
-    def _apply_coverage_highlighting(self, block, lines):
-        """
-        Applies coverage highlighting to the lines of a given block.
-        """
-        
-        native_block_addr = self._get_coverage_key(block)
-        is_il_block = block.is_il
-        
-        # lmsg(f"Lighthouse RenderLayer: START block {native_block_addr:#x} (IL: {is_il_block}, Type: {type(block)}, Lines: {len(lines)})")
-
-        if not self.director or not self.palette:
-            return lines
-
-        db_coverage = self.director.coverage
-        db_metadata = self.director.metadata
-
-        # Use the calculated native address key for metadata/coverage lookup.
-        node_metadata = db_metadata.nodes.get(native_block_addr, None)
-        node_coverage = db_coverage.nodes.get(native_block_addr, None)
-        
-        if not (node_coverage and node_metadata):
-            # lmsg(f"Lighthouse RenderLayer: END block {native_block_addr:#x} (No Coverage/Metadata found)")
-            return lines
-
-        r, g, b, _ = self.palette.coverage_paint.getRgb()
-        color = HighlightColor(red=r, green=g, blue=b)
-        
-        covered_instructions = set(node_coverage.executed_instructions.keys())
-        lines_processed = 0
-        lines_highlighted = 0
-
-        # Apply line highlighting for all blocks (Disassembly + ILs)
-        for line in lines:
-            lines_processed += 1
-            # Using getattr for defensive access to the instruction address
-            address = getattr(line, 'address', None)
-
-            if address is not None:
-                 is_covered = address in covered_instructions
-                 
-                 if is_il_block:
-                     # Log the IL lines only for debugging visibility
-                     tokens = getattr(line, 'tokens', None)
-                     text_summary = "".join(t.text for t in tokens) if tokens else 'N/A'
-                     # lmsg(f"  IL Line {lines_processed}: Addr {address:#x}, Covered: {is_covered}, Text: '{text_summary[:50]}'")
-
-            # Skip if address is None (non-instruction line) or not covered.
-            if address is None or address not in covered_instructions:
-                continue
-
-            # Apply highlight
-            line.highlight = color
-            lines_highlighted += 1
-            
-        #lmsg(f"Lighthouse RenderLayer: END block {native_block_addr:#x} (Processed: {lines_processed}, Highlighted: {lines_highlighted})")
-        return lines
 
 #------------------------------------------------------------------------------
 # Binary Ninja Painter
