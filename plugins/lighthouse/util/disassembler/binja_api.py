@@ -5,7 +5,6 @@ import logging
 import os
 import sys
 import threading
-import binaryninja # Added import
 
 from binaryninja import PythonScriptingInstance, binaryview
 from binaryninja.plugin import BackgroundTaskThread
@@ -195,7 +194,7 @@ class BinjaCoreAPI(DisassemblerCoreAPI):
         current_sidebar = Sidebar.current()
         
         if current_sidebar:
-            # CRITICAL FIX: Use the registered string name "Lighthouse"
+            # FIX: Use the registered plugin name "Lighthouse"
             current_sidebar.focus("Lighthouse")
         else:
             # Fallback for when no sidebar/frame is currently active/focused

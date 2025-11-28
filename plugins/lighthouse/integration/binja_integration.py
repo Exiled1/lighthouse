@@ -1,6 +1,5 @@
 import ctypes
 import logging
-# import binaryninja
 
 from binaryninja import PluginCommand, BinaryView
 from binaryninjaui import UIAction, UIActionHandler, Menu, Sidebar
@@ -92,7 +91,7 @@ class LighthouseBinja(LighthouseCore):
 
         In Binary Ninja, a dctx is a BinaryView (BV).
         """
-        if isinstance(dctx, binaryninja.BinaryView):
+        if isinstance(dctx, BinaryView):
             dctx_id = ctypes.addressof(dctx.handle.contents)
         else:
             dctx_id = str(id(dctx))
@@ -117,6 +116,25 @@ class LighthouseBinja(LighthouseCore):
     # UI Integration (Internal)
     #--------------------------------------------------------------------------
     
+    #
+    # TODO / HACK / XXX / V35 / 2021: Some of Binja's UI elements (such as the
+    # terminal) do not get assigned a BV, even if there is only one open.
+    #
+    # this is problematic, because if the user 'clicks' onto the terminal, and
+    # then tries to execute our UIActions (like 'Load Coverage File'), the
+    # given 'context.binaryView' will be None
+    #
+    # in the meantime, we have to use this workaround that will try to grab
+    # the 'current' bv from the dock. this is not ideal, but it will suffice.
+    #
+    # -----------------
+    #
+    # XXX: It's now 2024, Binja's UI / API stack has grown a lot. it's more
+    # powerful and a bunch of the oddities / hacks lighthouse employed for
+    # binja may no longer apply. this whole file should probably be revisited
+    # and re-factored at some point point.. sorry if it's hard to follow
+    #
+
     # NOTE: The implementations below remain mostly the same, relying on the 
     # original Core/Director logic. The UI stability is now handled by the 
     # SidebarWidget implementation.
