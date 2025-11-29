@@ -199,7 +199,8 @@ class BinjaCoreAPI(DisassemblerCoreAPI):
             current_sidebar.focus("Lighthouse")
         else:
             # Fallback for when no sidebar/frame is currently active/focused
-            self.warning("Failed to show dockable '%s': No active BinaryView window with a sidebar found." % dockable_name)
+            # self.warning("Failed to show dockable '%s': No active BinaryView window with a sidebar found." % dockable_name)
+            pass
 
     def hide_dockable(self, dockable_name):
         pass
