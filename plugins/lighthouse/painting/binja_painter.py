@@ -7,7 +7,7 @@ from binaryninja.renderlayer import RenderLayer
 from binaryninja.enums import RenderLayerDefaultEnableState
 from binaryninja import mainthread
 from typing import TYPE_CHECKING
-from lighthouse.util.log import lmsg # Using lmsg for debugging visibility
+from lighthouse.util.log import lmsg
 
 from lighthouse.painting import DatabasePainter
 from lighthouse.util.disassembler import disassembler
@@ -28,7 +28,7 @@ class BinjaCoverageRenderLayer(RenderLayer):
     palette = None
 
     name = "Lighthouse Coverage" 
-    default_enable_state = RenderLayerDefaultEnableState.EnabledByDefaultRenderLayerDefaultEnableState
+    default_enable_state = RenderLayerDefaultEnableState.DisabledByDefaultRenderLayerDefaultEnableState
 
     def __init__(self):
         super(BinjaCoverageRenderLayer, self).__init__()
@@ -41,8 +41,6 @@ class BinjaCoverageRenderLayer(RenderLayer):
         """
         Retrieves the correct native address (Native Basic Block Start) 
         to use as the lookup key for Lighthouse coverage.
-        
-        FIX: Uses the address of the first line to find the containing Native Basic Block.
         """
         # If it's a native block, use its start address directly.
         if not block.is_il:
@@ -83,7 +81,6 @@ class BinjaCoverageRenderLayer(RenderLayer):
         db_coverage = self.director.coverage
         db_metadata = self.director.metadata
 
-        # Use the calculated native address key for metadata/coverage lookup.
         node_metadata = db_metadata.nodes.get(native_block_addr, None)
         node_coverage = db_coverage.nodes.get(native_block_addr, None)
         
@@ -104,7 +101,7 @@ class BinjaCoverageRenderLayer(RenderLayer):
             if address is None or address not in covered_instructions:
                 continue
 
-            # Apply highlight
+            # Modify the line with a highlight!
             line.highlight = color
                 
         return lines
@@ -113,16 +110,16 @@ class BinjaCoverageRenderLayer(RenderLayer):
     # Explicit Render Layer API Implementations
     #--------------------------------------------------------------------------
 
-    def apply_to_disassembly_block(self, block: 'BasicBlock', lines):
+    def apply_to_disassembly_block(self, block, lines):
         return self._apply_coverage_highlighting(block, lines)
 
-    def apply_to_low_level_il_block(self, block: 'LowLevelILBasicBlock', lines):
+    def apply_to_low_level_il_block(self, block, lines):
         return self._apply_coverage_highlighting(block, lines)
 
-    def apply_to_medium_level_il_block(self, block: 'MediumLevelILBasicBlock', lines):
+    def apply_to_medium_level_il_block(self, block, lines):
         return self._apply_coverage_highlighting(block, lines)
 
-    def apply_to_high_level_il_block(self, block: 'HighLevelILBasicBlock', lines):
+    def apply_to_high_level_il_block(self, block, lines):
         return self._apply_coverage_highlighting(block, lines)
 
 
@@ -153,41 +150,20 @@ class BinjaPainter(DatabasePainter):
     #--------------------------------------------------------------------------
 
     def _paint_instructions(self, instructions):
-        self._refresh_ui()
         self._action_complete.set()
     def _clear_instructions(self, instructions):
-        self._refresh_ui()
         self._painted_partial -= set(instructions)
         self._painted_instructions -= set(instructions)
         self._action_complete.set()
     def _partial_paint(self, bv, instructions, color):
-        self._refresh_ui()
         self._painted_partial |= set(instructions)
         self._painted_instructions |= set(instructions)
-    def _paint_nodes(self, node_addresses):
-        self._painted_nodes |= set(node_addresses)
-        self._refresh_ui()
+    def _paint_nodes(self, nodes_coverage):
+        self._painted_nodes |= set(nodes_coverage)
         self._action_complete.set()
-    def _clear_nodes(self, node_addresses):
-        self._painted_nodes -= set(node_addresses)
-        self._refresh_ui()
+    def _clear_nodes(self, nodes_metadata):
+        self._painted_nodes -= set(nodes_metadata)
         self._action_complete.set()
-
-
-    def _refresh_ui(self):
-        """
-        Triggers a redraw of all relevant views to engage the Render Layer.
-        """
-        bv = disassembler[self.lctx].bv
-        
-        def update_functions():
-            for func in bv.functions:
-                if hasattr(func, 'request_disassembly_redraw'):
-                    func.request_disassembly_redraw()
-                elif hasattr(func, 'request_disassembly_update'):
-                    func.request_disassembly_update()
-                
-        mainthread.execute_on_main_thread(update_functions)
 
     def _cancel_action(self, job):
         pass

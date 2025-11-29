@@ -7,7 +7,7 @@ from binaryninjaui import UIAction, UIActionHandler, Menu, Sidebar
 from lighthouse.context import LighthouseContext
 from lighthouse.integration.core import LighthouseCore
 from lighthouse.util.disassembler import disassembler
-from lighthouse.util.disassembler.binja_api import set_integration_hack, LighthouseWidgetType # Import new hook
+from lighthouse.util.disassembler.binja_api import set_integration_hack, LighthouseWidgetType
 
 logger = logging.getLogger("Lighthouse.Binja.Integration")
 
